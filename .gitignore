@@ -1,4 +1,23 @@
+# Entornos virtuales
+venv/
 .env
-*.pyc
+
+# Archivos sensibles
 firebase_key.json
+firebase_key_base64.txt
+
+# Python compilado
+*.pyc
 __pycache__/
+
+# Archivos temporales
+*.log
+*.tmp
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración de editor
+.vscode/
+.idea/

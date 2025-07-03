@@ -22,13 +22,23 @@ from google.cloud import firestore
 
 # --- Configuración ---
 load_dotenv()
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+import base64
+
+firebase_key_base64 = os.getenv("FIREBASE_KEY_BASE64")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+if firebase_key_base64:
+    with open("firebase_key.json", "wb") as f:
+        f.write(base64.b64decode(firebase_key_base64))
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "firebase_key.json"
+else:
+    raise ValueError("❌ La variable FIREBASE_KEY_BASE64 no está definida en el entorno.")
+
 db = firestore.Client()
 
 # --- Estados para la conversación de presupuesto ---
-ESCOGER_CATEGORIA, ESPECIFICAR_LIMITE, PREGUNTAR_ACCION_POST_PRESUPUESTO, ESPERANDO_CATEGORIA_CONSULTA = range(4)
-HANDLE_GASTO_CATEGORIA, HANDLE_GASTO_PERSONALIZADA = range(4, 6)
+ESCOGER_CATEGORIA, ESPECIFICAR_LIMITE, PREGUNTAR_ACCION_POST_PRESUPUESTO, ESPERANDO_CATEGORIA_CONSULTA, ESPECIFICAR_CATEGORIA_PERSONALIZADA, CONFIRMAR_SOBREESCRITURA = range(6)
+HANDLE_GASTO_CATEGORIA, HANDLE_GASTO_PERSONALIZADA = range(6, 8)
 
 CATEGORIAS_VALIDAS = [
     "comida", "transporte", "salud", "ocio", "educación", "hogar", "servicios"
@@ -40,6 +50,15 @@ teclado_menu = ReplyKeyboardMarkup(
     [[KeyboardButton("📋 Menú")]],
     resize_keyboard=True
 )
+
+def obtener_teclado_principal():
+    return ReplyKeyboardMarkup([
+        ["📝 Registrar gasto", "📋 Menú"],
+        ["📊 Resumen", "📈 Comparar"],
+        ["💰 Total", "📌 Último"],
+        ["🗑️ Eliminar", "📉 Gráfico"],
+        ["💼 Presupuesto"]
+    ], resize_keyboard=True)
 
 def obtener_categorias_con_botones(user_id: str):
     categorias_ref = db.collection("usuarios").document(user_id).collection("categorias").stream()
@@ -81,6 +100,7 @@ def extraer_monto_descripcion(texto):
 
     return None, None
 
+
 def formatear_pesos(valor):
     return f"${valor:,.0f}".replace(",", ".")
 
@@ -90,6 +110,20 @@ def detectar_gasto_repetitivo(user_id, categoria, historial):
         return f"La categoría *{categoria}* muestra un patrón de gasto estable cada mes."
     return None
 
+async def responder(update: Update, texto: str, **kwargs):
+    if update.message:
+        await update.message.reply_text(texto, **kwargs)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(texto, **kwargs)
+    else:
+        print("⚠️ No se pudo enviar mensaje: update sin message ni callback.")
+
+
+async def responder_foto(update: Update, foto: BytesIO, **kwargs):
+    if update.message:
+        await update.message.reply_photo(foto, **kwargs)
+    elif update.callback_query:
+        await update.callback_query.message.reply_photo(foto, **kwargs)
 
 def detectar_categoria_sin_limite(resumen, limites):
     sugerencias = []
@@ -179,23 +213,59 @@ async def verificar_presupuesto(update: Update, user_id: str, categoria: str):
         await update.callback_query.message.reply_text(mensaje, parse_mode="Markdown", reply_markup=reply_markup)
 
 # --- Funciones del bot ---
+
 async def mostrar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    menu = (
-        "👋 *Bienvenido a tu bot de gastos!*\n\n"
-        "Puedes registrar gastos simplemente escribiendo:\n"
-        "5000 comida\n\n"
-        "También puedes usar los siguientes comandos:\n"
-        "• /presupuesto – Establecer un presupuesto por categoría\n"
-         "• /consultar – Consultar presupuesto por categoría\n"
-        "• /resumen – Ver resumen por categorías\n"
-        "• /total – Ver total gastado\n"
-        "• /ultimo – Ver tu último gasto\n"
-        "• /eliminar – Eliminar el último gasto\n"
-        "• /grafico – Ver gráfico de distribución de gastos\n"
-        "• /comparar – Ver variación mensual"
+    texto = (
+        "📋 *Menú principal*\n\n"
+        "Toca uno de los botones para usar el bot:\n\n"
+        "📝 Registrar gasto — Registra un nuevo gasto (ej. 5000 comida)\n"
+        "💼 Presupuesto — Establece un límite mensual por categoría\n"
+        "📊 Resumen — Muestra lo que has gastado por categoría\n"
+        "📈 Comparar — Compara tu gasto con el mes anterior\n"
+        "💰 Total — Muestra cuánto llevas gastado este mes\n"
+        "📌 Último — Te dice cuál fue tu último gasto\n"
+        "🗑️ Eliminar — Elimina el último gasto que registraste\n"
+        "📉 Gráfico — Muestra un gráfico circular de tus gastos"
     )
-    # await update.message.reply_text(menu, parse_mode="Markdown")
-    await update.message.reply_text(menu, parse_mode="Markdown", reply_markup=teclado_menu)
+
+    botones = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📝 Registrar gasto", callback_data="menu:registrar_gasto")],
+        [InlineKeyboardButton("💼 Presupuesto", callback_data="menu:presupuesto")],
+        [InlineKeyboardButton("📊 Resumen", callback_data="menu:resumen")],
+        [InlineKeyboardButton("📈 Comparar", callback_data="menu:comparar")],
+        [InlineKeyboardButton("💰 Total", callback_data="menu:total")],
+        [InlineKeyboardButton("📌 Último", callback_data="menu:ultimo")],
+        [InlineKeyboardButton("🗑️ Eliminar", callback_data="menu:eliminar")],
+        [InlineKeyboardButton("📉 Gráfico", callback_data="menu:grafico")]
+    ])
+
+    if update.message:
+        await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=botones)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(texto, parse_mode="Markdown", reply_markup=botones)
+
+async def manejar_menu_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    # Ejecutar la función correspondiente
+    if data == "menu:registrar_gasto":
+        await query.message.reply_text("✍️ Escribe el gasto en el formato: 5000 comida")
+    elif data == "menu:resumen":
+        await resumen(update, context)
+    elif data == "menu:comparar":
+        await comparar(update, context)
+    elif data == "menu:total":
+        await total(update, context)
+    elif data == "menu:ultimo":
+        await ultimo(update, context)
+    elif data == "menu:eliminar":
+        await eliminar(update, context)
+    elif data == "menu:grafico":
+        await grafico(update, context)
+    else:
+        await query.message.reply_text("❌ Opción no reconocida.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -213,23 +283,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await mostrar_menu(update, context)
 
 # --- Flujo para establecer presupuesto ---
-
 async def presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     botones = obtener_categorias_con_botones(user_id)
 
-    await update.message.reply_text(
-        "¿Para qué categoría deseas establecer un presupuesto?",
-        reply_markup=botones
-    )
+    if update.message:
+        await update.message.reply_text("¿Para qué categoría deseas establecer un presupuesto?", reply_markup=botones)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text("¿Para qué categoría deseas establecer un presupuesto?", reply_markup=botones)
+
     return ESCOGER_CATEGORIA
 
+async def seleccionar_categoria_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("✍️ Escribe el nombre de la nueva categoría personalizada:")
+    return ESPECIFICAR_CATEGORIA_PERSONALIZADA
 
 async def escoger_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("🎯 Entró al handler escoger_categoria")  # << Este sí debe aparecer
     query = update.callback_query
     await query.answer()
 
-    categoria = query.data.split(":")[1]  # Esto asume que el callback_data es "cat:comida", etc.
+    categoria = query.data.split(":")[1]
     context.user_data['categoria_presupuesto'] = categoria
 
     await query.edit_message_text(
@@ -238,40 +314,85 @@ async def escoger_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ESPECIFICAR_LIMITE
 
+async def guardar_categoria_personalizada_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    categoria = update.message.text.strip().lower()
+    context.user_data['categoria_presupuesto'] = categoria
+
+    await update.message.reply_text(
+        f"¿Cuál es tu presupuesto mensual para *{categoria}*?",
+        parse_mode="Markdown"
+    )
+    return ESPECIFICAR_LIMITE
+
 async def especificar_limite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        limite = int(update.message.text.strip())
+        texto = update.message.text.strip().replace(".", "").replace(",", "")
+        limite = int(texto)
+
         categoria = context.user_data['categoria_presupuesto']
         user_id = str(update.effective_user.id)
-        # Guardar presupuesto
-        db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).set({
-            "limite": limite,
-            "actualizado": datetime.datetime.now(pytz.timezone("America/Bogota"))
-        })
 
-        # 🚨 AÑADE ESTO para que la categoría también se registre como válida
-        db.collection("usuarios").document(user_id).collection("categorias").document(categoria).set({
-            "nombre": categoria
-        }, merge=True)
+        # Verificar si ya existe
+        presupuesto_doc = db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).get()
 
-        await update.message.reply_text(
-            rf"✅ Listo. Tu presupuesto para *{categoria}* es de ${limite:,} al mes.",
-            parse_mode="Markdown"
-        )
+        if presupuesto_doc.exists:
+            limite_actual = presupuesto_doc.to_dict().get("limite", 0)
+            context.user_data["nuevo_limite"] = limite
+            await update.message.reply_text(
+                f"⚠️ Ya tienes un presupuesto para *{categoria}* de ${limite_actual:,}.\n"
+                f"¿Quieres reemplazarlo por ${limite:,}?",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Sí, reemplazar", callback_data="confirmar_reemplazo")],
+                    [InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_reemplazo")]
+                ])
+            )
+            return CONFIRMAR_SOBREESCRITURA
 
-        # Mostrar opciones al usuario
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Registrar otro presupuesto", callback_data="otro_presupuesto")],
-            [InlineKeyboardButton("📝 Registrar un gasto", callback_data="registrar_gasto")],
-            [InlineKeyboardButton("🚪 Salir", callback_data="salir")],
-        ])
-        await update.message.reply_text("¿Qué deseas hacer ahora?", reply_markup=keyboard)
-
+        # Si no existía, guarda directamente
+        await guardar_presupuesto(user_id, categoria, limite, update)
         return PREGUNTAR_ACCION_POST_PRESUPUESTO
 
     except ValueError:
         await update.message.reply_text("❌ El valor debe ser numérico. Intenta de nuevo.")
         return ESPECIFICAR_LIMITE
+
+async def guardar_presupuesto(user_id, categoria, limite, update):
+    db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).set({
+        "limite": limite,
+        "actualizado": datetime.datetime.now(pytz.timezone("America/Bogota"))
+    })
+
+    db.collection("usuarios").document(user_id).collection("categorias").document(categoria).set({
+        "nombre": categoria
+    }, merge=True)
+
+    await update.message.reply_text(
+        rf"✅ Listo. Tu presupuesto para *{categoria}* es de ${limite:,} al mes.",
+        parse_mode="Markdown"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Registrar otro presupuesto", callback_data="otro_presupuesto")],
+        [InlineKeyboardButton("📝 Registrar un gasto", callback_data="registrar_gasto")],
+        [InlineKeyboardButton("🚪 Salir", callback_data="salir")],
+    ])
+    await update.message.reply_text("¿Qué deseas hacer ahora?", reply_markup=keyboard)
+
+async def confirmar_reemplazo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+    categoria = context.user_data.get("categoria_presupuesto")
+    limite = context.user_data.get("nuevo_limite")
+
+    await guardar_presupuesto(user_id, categoria, limite, query)
+    return PREGUNTAR_ACCION_POST_PRESUPUESTO
+
+async def cancelar_reemplazo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text("❌ Operación cancelada. El presupuesto anterior se mantuvo.")
+    return ConversationHandler.END
 
 async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -279,7 +400,10 @@ async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.
 
     opcion = query.data
     if opcion == "otro_presupuesto":
+        user_id = str(update.effective_user.id)
+        botones = obtener_categorias_con_botones(user_id)
         await query.edit_message_text("📝 ¿Para qué categoría deseas establecer otro presupuesto?")
+        await query.message.reply_text("Selecciona una categoría:", reply_markup=botones)
         return ESCOGER_CATEGORIA
 
     elif opcion == "registrar_gasto":
@@ -508,12 +632,12 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d = doc.to_dict()
         resumen[d["categoria"]] = resumen.get(d["categoria"], 0) + d["monto"]
     if not resumen:
-        await update.message.reply_text("📭 No tienes gastos registrados.")
+        await responder(update, "📭 No tienes gastos registrados.")
         return
     mensaje = "🧾 *Resumen de gastos:*\n\n"
     for cat, total in resumen.items():
         mensaje += f"• {cat}: ${total:,.0f}".replace(",", ".") + "\n"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await responder(update, mensaje, parse_mode="Markdown")
 
 async def comparar_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -569,15 +693,13 @@ async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     signo = "🔺" if variacion > 0 else "🔻"
     actual_str = f"${suma_actual:,.0f}".replace(",", ".")
     anterior_str = f"${suma_anterior:,.0f}".replace(",", ".")
-    await update.message.reply_text(
-        f"📊 Gasto mensual:\nEste mes: {actual_str}\nMes anterior: {anterior_str}\nVariación: {signo} {abs(round(variacion, 1))}%"
-    )
-
+    await responder(update, f"📊 Gasto mensual:\nEste mes: {actual_str}\nMes anterior: {anterior_str}\nVariación: {signo} {abs(round(variacion, 1))}%")
+    
 async def total(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     docs = db.collection("usuarios").document(user_id).collection("gastos").stream()
     total_gasto = sum(doc.to_dict()["monto"] for doc in docs)
-    await update.message.reply_text(f"💰 Total gastado: ${total_gasto:,.0f}".replace(",", "."))
+    await responder(update, f"💰 Total gastado: ${total_gasto:,.0f}".replace(",", "."))
 
 async def ultimo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -587,16 +709,16 @@ async def ultimo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d = g.to_dict()
         fecha_str = d["fecha"].strftime("%Y-%m-%d %H:%M")
         monto_formateado = formatear_pesos(d["monto"])
-        await update.message.reply_text(f"📌 Último gasto:\n{monto_formateado} en {d['categoria']} el {fecha_str}")
+        await responder(update, f"📌 Último gasto:\n{monto_formateado} en {d['categoria']} el {fecha_str}")
         return
-    await update.message.reply_text("📭 Aún no has registrado gastos.")
+    await responder(update, "📭 Aún no has registrado gastos.")
 
 async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     gastos = list(db.collection("usuarios").document(user_id).collection("gastos")
         .order_by("fecha", direction=firestore.Query.DESCENDING).limit(1).stream())
     if not gastos:
-        await update.message.reply_text("📭 No hay gastos para eliminar.")
+        await responder(update, "📭 No hay gastos para eliminar.")
         return
     gasto = gastos[0]
     d = gasto.to_dict()
@@ -610,7 +732,7 @@ async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ Sí", callback_data="confirmar_eliminar")],
         [InlineKeyboardButton("❌ No", callback_data="cancelar_eliminar")]
     ])
-    await update.message.reply_text(msg, reply_markup=keyboard)
+    await responder(update, msg, reply_markup=keyboard)
 
 
 async def callback_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -734,7 +856,7 @@ async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d = doc.to_dict()
         resumen[d["categoria"]] = resumen.get(d["categoria"], 0) + d["monto"]
     if not resumen:
-        await update.message.reply_text("📭 No tienes datos suficientes para generar el gráfico.")
+        await responder(update, "📭 No tienes datos suficientes para generar el gráfico.")
         return
 
     categorias = list(resumen.keys())
@@ -748,7 +870,8 @@ async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buf = BytesIO()
     plt.savefig(buf, format="png")
     buf.seek(0)
-    await update.message.reply_photo(buf)
+
+    await responder_foto(update, buf)
 
 def detectar_aumento_inusual(actual, anterior):
     alertas = []
@@ -896,24 +1019,31 @@ async def enviar_reporte_trimestral(user_id, now, bot):
         )
 
 
-async def callback_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("⚠️ Opción no reconocida. Por favor, vuelve a intentarlo o usa /menu.")
+async def comando_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 
+    await responder(update, "❌ Comando no reconocido. Usa los botones o escribe /menu para ver opciones.")
+    await mostrar_menu(update, context)
 
 # --- Main ---
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Handlers de comandos
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", mostrar_menu))
 
     # Conversación para establecer presupuesto
     conv_presupuesto = ConversationHandler(
-        entry_points=[CommandHandler("presupuesto", presupuesto)],
+        entry_points=[
+                CommandHandler("presupuesto", presupuesto),
+                MessageHandler(filters.TEXT & filters.Regex("^💼 Presupuesto$"), presupuesto),
+                CallbackQueryHandler(presupuesto, pattern="^menu:presupuesto$")
+        ],
         states={
-            ESCOGER_CATEGORIA: [CallbackQueryHandler(escoger_categoria, pattern=r"^cat:.*")],
+            ESCOGER_CATEGORIA: [
+                CallbackQueryHandler(escoger_categoria, pattern=r"^cat:.*"),
+                CallbackQueryHandler(seleccionar_categoria_presupuesto, pattern=r"^catref:personalizada$"), 
+            ],
+            ESPECIFICAR_CATEGORIA_PERSONALIZADA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, guardar_categoria_personalizada_presupuesto)
+            ],
             ESPECIFICAR_LIMITE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, especificar_limite),
                 CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+")
@@ -922,9 +1052,13 @@ def main():
                 CallbackQueryHandler(manejar_accion_post_presupuesto),
                 CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$")
             ],
+            CONFIRMAR_SOBREESCRITURA: [
+                CallbackQueryHandler(confirmar_reemplazo, pattern="^confirmar_reemplazo$"),
+                CallbackQueryHandler(cancelar_reemplazo, pattern="^cancelar_reemplazo$")
+            ],
             ESPERANDO_CATEGORIA_CONSULTA: [
                 CallbackQueryHandler(responder_consulta_presupuesto, pattern=r"^consulta_categoria:.+")
-            ]
+            ]    
         },
         fallbacks=[CommandHandler("cancelar", cancelar_presupuesto)],
         per_chat=True
@@ -958,11 +1092,14 @@ def main():
         per_chat=True
     )
 
-
-    # Agrega handlers
     app.add_handler(conv_presupuesto)
     app.add_handler(consultar_presupuesto_handler)
     app.add_handler(gasto_categoria_handler)
+
+
+    # Agrega handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", mostrar_menu))
     app.add_handler(CommandHandler("resumen", resumen))
     app.add_handler(CommandHandler("total", total))
     app.add_handler(CommandHandler("ultimo", ultimo))
@@ -970,10 +1107,19 @@ def main():
     app.add_handler(CommandHandler("grafico", grafico))
     app.add_handler(CommandHandler("comparar", comparar))
     app.add_handler(CommandHandler("comparar_detalle", comparar_categorias))
+
+    
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📋 Menú$"), mostrar_menu))
-    app.add_handler(CallbackQueryHandler(callback_confirmar))
-    app.add_handler(CallbackQueryHandler(callback_confirmar))
-    app.add_handler(CallbackQueryHandler(callback_desconocido))  # <= al final como respaldo
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📝 Registrar gasto$"), handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📊 Resumen$"), resumen))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📈 Comparar$"), comparar))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^💰 Total$"), total))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📌 Último$"), ultimo))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗑️ Eliminar$"), eliminar))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📉 Gráfico$"), grafico))
+    app.add_handler(MessageHandler(filters.COMMAND, comando_desconocido))  
+    app.add_handler(CallbackQueryHandler(manejar_menu_inline, pattern=r"^menu:"))
+    app.add_handler(CallbackQueryHandler(callback_confirmar))# <= al final como respaldo
     #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Inicia el scheduler (trabaja con asyncio)
@@ -988,6 +1134,8 @@ def main():
         when=time(hour=10, minute=0, tzinfo=pytz.timezone("America/Bogota")),
         day=1
     )
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mostrar_menu))
 
     print("🤖 Bot y programador iniciados.")
     app.run_polling()  
