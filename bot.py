@@ -576,62 +576,51 @@ async def seleccionar_categoria_ref(update: Update, context: ContextTypes.DEFAUL
     categoria = data.strip().lower()
     context.user_data["gasto"]["categoria"] = categoria
     await guardar_gasto_con_categoria(update, context, message_id=query.message.message_id)
-    return ConversationHandler.END
+    return HANDLE_GASTO_CATEGORIA
 
 async def handle_categoria_personalizada(update: Update, context: ContextTypes.DEFAULT_TYPE):
     categoria = update.message.text.strip().lower()
     context.user_data["gasto"]["categoria"] = categoria
     await guardar_gasto_con_categoria(update, context)
-    return ConversationHandler.END
+    return HANDLE_GASTO_CATEGORIA
 
-async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id=None):
+async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    gasto = context.user_data.get("gasto", {})
-    monto = gasto.get("monto")
-    descripcion = gasto.get("descripcion")
-    categoria = gasto.get("categoria")
+    gasto_data = context.user_data.get("gasto", {})
+    categoria = gasto_data.get("categoria")
+    valor = gasto_data.get("valor")
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Crear categoría si no existe como documento
-    categoria_ref = db.collection("usuarios").document(user_id).collection("categorias").document(categoria)
-    categoria_ref.set({"nombre": categoria}, merge=True)
+    if not categoria or not valor:
+        await update.message.reply_text("❌ Hubo un error guardando el gasto.")
+        return ConversationHandler.END
 
-    # Guardar gasto
-    db.collection("usuarios").document(user_id).collection("gastos").add({
-        "monto": monto,
-        "descripcion": descripcion,
+    # Guardar el gasto en Firestore
+    gasto = {
+        "valor": valor,
         "categoria": categoria,
-        "categoria_ref": categoria_ref,
-        "fecha": datetime.datetime.now(pytz.timezone("America/Bogota"))
-    })
+        "fecha": fecha
+    }
+    db.collection("usuarios").document(user_id).collection("gastos").add(gasto)
 
-    mensaje = f"✅ Gasto registrado:\n💸 ${monto} en {categoria}"
-    if message_id:
-        await update.callback_query.edit_message_text(mensaje)
-    else:
-        await update.message.reply_text(mensaje)
+    await update.message.reply_text(f"💾 Gasto registrado en la categoría *{categoria}* por *${valor:,.0f}*", parse_mode="Markdown")
 
-    # Verifica si superó presupuesto
-    await verificar_presupuesto(update, user_id, categoria)
-
-    # 🔍 Verificar si esa categoría no tiene presupuesto asignado
+    # Verificar si hay presupuesto
     presupuesto_doc = db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).get()
+
     if not presupuesto_doc.exists:
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Sí, establecer límite", callback_data=f"establecer_presupuesto:{categoria}")],
             [InlineKeyboardButton("❌ No, gracias", callback_data="ignorar_presupuesto")]
         ])
-        if message_id:
-            await update.callback_query.message.reply_text(
-                f"🔎 Veo que *{categoria}* no tiene un presupuesto mensual definido.\n¿Deseas establecer un límite?",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        else:
-            await update.message.reply_text(
-                f"🔎 Veo que *{categoria}* no tiene un presupuesto mensual definido.\n¿Deseas establecer un límite?",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
+        await update.message.reply_text(
+            f"🔎 Veo que *{categoria}* no tiene un presupuesto mensual definido.\n¿Deseas establecer un límite?",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+        return HANDLE_GASTO_CATEGORIA  # 👈 ESTADO PARA QUE LOS BOTONES FUNCIONEN
+
+    return ConversationHandler.END
 
 async def iniciar_establecer_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
