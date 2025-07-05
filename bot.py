@@ -1109,7 +1109,9 @@ def main():
                 CallbackQueryHandler(seleccionar_categoria_ref, pattern=r"^cat:.*"),
             ],
             HANDLE_GASTO_PERSONALIZADA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_categoria_personalizada)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_categoria_personalizada),
+                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"), 
+                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$"), 
             ]
         },
         fallbacks=[CommandHandler("cancelar", cancelar_presupuesto),
