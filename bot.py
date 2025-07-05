@@ -1081,7 +1081,8 @@ def main():
             ],
             PREGUNTAR_ACCION_POST_PRESUPUESTO: [
                 CallbackQueryHandler(manejar_accion_post_presupuesto),
-                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$")
+                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$"),
+                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+")
             ],
             CONFIRMAR_SOBREESCRITURA: [
                 CallbackQueryHandler(confirmar_reemplazo, pattern="^confirmar_reemplazo$"),
@@ -1106,8 +1107,6 @@ def main():
             HANDLE_GASTO_CATEGORIA: [
                 CallbackQueryHandler(seleccionar_categoria_ref, pattern=r"^catref:.*"),
                 CallbackQueryHandler(seleccionar_categoria_ref, pattern=r"^cat:.*"),
-                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"),
-                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$")
             ],
             HANDLE_GASTO_PERSONALIZADA: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_categoria_personalizada)
