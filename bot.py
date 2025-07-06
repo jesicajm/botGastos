@@ -1161,7 +1161,11 @@ def main():
         when=time(hour=10, minute=0, tzinfo=pytz.timezone("America/Bogota")),
         day=1
     )
+    
+    async def borrar_webhook():
+        await app.bot.delete_webhook(drop_pending_updates=True)
 
+    asyncio.run(borrar_webhook()) 
 
     print("🤖 Bot y programador iniciados.")
     app.run_polling()  
