@@ -67,10 +67,11 @@ def obtener_categorias_con_botones(user_id: str):
     # Evitar duplicados
     todas = list(dict.fromkeys(CATEGORIAS_VALIDAS + personalizadas))
     
-    # Botones por fila (2 por fila)
+    # Botones por fila (uno por fila)
     botones = [[InlineKeyboardButton(cat.capitalize(), callback_data=f"cat:{cat}")] for cat in todas]
     botones.append([InlineKeyboardButton("➕ Otra categoría", callback_data="catref:personalizada")])
-    return InlineKeyboardMarkup(botones)
+    
+    return botones  # solo devolvemos la lista
 
 def extraer_monto_descripcion(texto):
     texto = texto.lower().strip()
@@ -285,16 +286,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Flujo para establecer presupuesto ---
 async def presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    botones = obtener_categorias_con_botones(user_id)
+    botones_lista = obtener_categorias_con_botones(user_id)
 
-    botones.inline_keyboard.append([
-        InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_presupuesto")
-    ])
+    # Añadir botón de cancelar al final
+    botones_lista.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_presupuesto")])
+
+    reply_markup = InlineKeyboardMarkup(botones_lista)
 
     if update.message:
-        await update.message.reply_text("¿Para qué categoría deseas establecer un presupuesto?", reply_markup=botones)
+        await update.message.reply_text(
+            "¿Para qué categoría deseas establecer un presupuesto?", 
+            reply_markup=reply_markup
+        )
     elif update.callback_query:
-        await update.callback_query.message.reply_text("¿Para qué categoría deseas establecer un presupuesto?", reply_markup=botones)
+        await update.callback_query.message.reply_text(
+            "¿Para qué categoría deseas establecer un presupuesto?", 
+            reply_markup=reply_markup
+        )
 
     return ESCOGER_CATEGORIA
 
