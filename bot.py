@@ -453,7 +453,12 @@ async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.
 
 
 async def cancelar_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelado. No se guardó ningún presupuesto.")
+    if update.callback_query:
+        await update.callback_query.answer()  # opcional, para cerrar el "loading" en Telegram
+        await update.callback_query.message.reply_text("❌ Cancelado. No se guardó ningún presupuesto.")
+    elif update.message:
+        await update.message.reply_text("❌ Cancelado. No se guardó ningún presupuesto.")
+
     return ConversationHandler.END
 
 
