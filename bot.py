@@ -587,7 +587,12 @@ async def seleccionar_categoria_ref(update: Update, context: ContextTypes.DEFAUL
         return HANDLE_GASTO_PERSONALIZADA
 
     categoria = data.strip().lower()
+
+    if "gasto" not in context.user_data:
+        context.user_data["gasto"] = {}
+
     context.user_data["gasto"]["categoria"] = categoria
+
     await guardar_gasto_con_categoria(update, context, message_id=query.message.message_id)
     return HANDLE_GASTO_CATEGORIA
 
@@ -601,22 +606,22 @@ async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFA
     user_id = str(update.effective_user.id)
     gasto_data = context.user_data.get("gasto", {})
     categoria = gasto_data.get("categoria")
-    valor = gasto_data.get("valor")
+    monto = gasto_data.get("monto")
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    if not categoria or not valor:
+    if not categoria or not monto:
         await update.message.reply_text("❌ Hubo un error guardando el gasto.")
         return ConversationHandler.END
 
     # Guardar el gasto en Firestore
     gasto = {
-        "valor": valor,
+        "monto": monto,
         "categoria": categoria,
         "fecha": fecha
     }
     db.collection("usuarios").document(user_id).collection("gastos").add(gasto)
 
-    await update.message.reply_text(f"💾 Gasto registrado en la categoría *{categoria}* por *${valor:,.0f}*", parse_mode="Markdown")
+    await update.message.reply_text(f"💾 Gasto registrado en la categoría *{categoria}* por *${monto:,.0f}*", parse_mode="Markdown")
 
     # Verificar si hay presupuesto
     presupuesto_doc = db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).get()
