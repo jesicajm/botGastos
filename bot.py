@@ -63,15 +63,10 @@ def obtener_teclado_principal():
 def obtener_categorias_con_botones(user_id: str):
     categorias_ref = db.collection("usuarios").document(user_id).collection("categorias").stream()
     personalizadas = [doc.id for doc in categorias_ref]
-
-    # Evitar duplicados
     todas = list(dict.fromkeys(CATEGORIAS_VALIDAS + personalizadas))
-    
-    # Botones por fila (uno por fila)
     botones = [[InlineKeyboardButton(cat.capitalize(), callback_data=f"cat:{cat}")] for cat in todas]
     botones.append([InlineKeyboardButton("➕ Otra categoría", callback_data="catref:personalizada")])
-    
-    return botones  # solo devolvemos la lista
+    return InlineKeyboardMarkup(botones)
 
 def extraer_monto_descripcion(texto):
     texto = texto.lower().strip()
