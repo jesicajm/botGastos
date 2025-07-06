@@ -1165,8 +1165,7 @@ async def main():
     await app.bot.delete_webhook(drop_pending_updates=True)
 
     print("🤖 Bot y programador iniciados.")
-    await app.run_polling()  
-
+    app.run_polling()  
+    
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
