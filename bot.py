@@ -1043,7 +1043,7 @@ async def comando_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE
     await mostrar_menu(update, context)
 
 # --- Main ---
-def main():
+async def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
 
@@ -1162,13 +1162,11 @@ def main():
         day=1
     )
     
-    async def borrar_webhook():
-        await app.bot.delete_webhook(drop_pending_updates=True)
-
-    asyncio.run(borrar_webhook()) 
+    await app.bot.delete_webhook(drop_pending_updates=True)
 
     print("🤖 Bot y programador iniciados.")
-    app.run_polling()  
+    await app.run_polling()  
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
