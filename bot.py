@@ -1071,6 +1071,7 @@ def main():
             ESCOGER_CATEGORIA: [
                 CallbackQueryHandler(escoger_categoria, pattern=r"^cat:.*"),
                 CallbackQueryHandler(seleccionar_categoria_presupuesto, pattern=r"^catref:personalizada$"), 
+                CallbackQueryHandler(cancelar_presupuesto, pattern="^cancelar_presupuesto$")
             ],
             ESPECIFICAR_CATEGORIA_PERSONALIZADA: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, guardar_categoria_personalizada_presupuesto)
