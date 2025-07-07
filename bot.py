@@ -281,9 +281,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Flujo para establecer presupuesto ---
 async def presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    botones_lista = obtener_categorias_con_botones(user_id)
+    botones_markup = obtener_categorias_con_botones(user_id)
 
-    # Añadir botón de cancelar al final
+    # Convertimos a lista de listas para modificar
+    botones_lista = botones_markup.inline_keyboard
     botones_lista.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_presupuesto")])
 
     reply_markup = InlineKeyboardMarkup(botones_lista)
