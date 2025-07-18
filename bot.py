@@ -6,6 +6,7 @@ import pytz
 import datetime
 import matplotlib.pyplot as plt
 from io import BytesIO
+from dateutil import parser 
 import re
 
 from telegram import (
@@ -39,6 +40,7 @@ db = firestore.Client()
 # --- Estados para la conversación de presupuesto ---
 ESCOGER_CATEGORIA, ESPECIFICAR_LIMITE, PREGUNTAR_ACCION_POST_PRESUPUESTO, ESPERANDO_CATEGORIA_CONSULTA, ESPECIFICAR_CATEGORIA_PERSONALIZADA, CONFIRMAR_SOBREESCRITURA = range(6)
 HANDLE_GASTO_CATEGORIA, HANDLE_GASTO_PERSONALIZADA = range(6, 8)
+ESPECIFICAR_LIMITE_GASTO, PREGUNTAR_ACCION_POST_PRESUPUESTO_GASTO = range(8, 10)
 
 CATEGORIAS_VALIDAS = [
     "comida", "transporte", "salud", "ocio", "educación", "hogar", "servicios"
@@ -138,11 +140,15 @@ async def verificar_presupuesto(update: Update, user_id: str, categoria: str):
     inicio_mes = datetime.datetime.now(pytz.timezone("America/Bogota")).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
+
     gastos = db.collection("usuarios").document(user_id).collection("gastos") \
         .where("categoria", "==", categoria) \
         .where("fecha", ">=", inicio_mes).stream()
 
     total_mes = sum(doc.to_dict().get("monto", 0) for doc in gastos)
+
+    print(f"🧾 Total gastado en {categoria}: {formatear_pesos(total_mes)}")
+    print(f"💸 Límite definido: {formatear_pesos(limite)}")
 
     if total_mes <= limite:
         return  # No se ha excedido el presupuesto
@@ -200,7 +206,6 @@ async def verificar_presupuesto(update: Update, user_id: str, categoria: str):
     else:
         mensaje += "ℹ️ No hay otras categorías con presupuesto disponible actualmente."
 
-    # Enviar mensaje
     reply_markup = InlineKeyboardMarkup(botones) if botones else None
 
     if update.message:
@@ -284,22 +289,23 @@ async def presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     botones_markup = obtener_categorias_con_botones(user_id)
 
     # Convertimos a lista de listas para modificar
-    botones_lista = botones_markup.inline_keyboard
+    botones_lista = list(botones_markup.inline_keyboard)
     botones_lista.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_presupuesto")])
 
     reply_markup = InlineKeyboardMarkup(botones_lista)
 
     if update.message:
         await update.message.reply_text(
-            "¿Para qué categoría deseas establecer un presupuesto?", 
+            "¿Para qué categoría deseas establecer un presupuesto mensual?", 
             reply_markup=reply_markup
         )
     elif update.callback_query:
         await update.callback_query.message.reply_text(
-            "¿Para qué categoría deseas establecer un presupuesto?", 
+            "¿Para qué categoría deseas establecer un presupuesto mensual?", 
             reply_markup=reply_markup
         )
 
+    context.chat_data["conversation"] = "presupuesto"
     return ESCOGER_CATEGORIA
 
 async def seleccionar_categoria_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,7 +326,11 @@ async def escoger_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"¿Cuál es tu presupuesto mensual para *{categoria}*?",
         parse_mode="Markdown"
     )
-    return ESPECIFICAR_LIMITE
+
+    if context.chat_data.get("conversation") == "gasto":
+        return ESPECIFICAR_LIMITE_GASTO
+    else:
+        return ESPECIFICAR_LIMITE
 
 async def guardar_categoria_personalizada_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     categoria = update.message.text.strip().lower()
@@ -335,6 +345,7 @@ async def guardar_categoria_personalizada_presupuesto(update: Update, context: C
 async def especificar_limite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         texto = update.message.text.strip().replace(".", "").replace(",", "")
+        print(f"🟢 especificar_limite: texto={texto}, user={update.effective_user.id}, estado={context.chat_data.get('conversation')}")
 
         if not texto.isdigit():
             keyboard = InlineKeyboardMarkup([
@@ -374,7 +385,11 @@ async def especificar_limite(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Si no existía, guarda directamente
         await guardar_presupuesto(user_id, categoria, limite, update)
-        return PREGUNTAR_ACCION_POST_PRESUPUESTO
+        
+        if context.chat_data.get("conversation") == "gasto":
+            return PREGUNTAR_ACCION_POST_PRESUPUESTO_GASTO
+        else:
+            return PREGUNTAR_ACCION_POST_PRESUPUESTO
 
     except ValueError:
         await update.message.reply_text("❌ El valor debe ser numérico. Usa: [monto]. Ej: 12.000")
@@ -385,7 +400,8 @@ async def reintentar_especificar_limite(update: Update, context: ContextTypes.DE
     await query.answer()
     categoria = context.user_data.get('categoria_presupuesto', 'la categoría seleccionada')
     await query.edit_message_text(
-        f"✍️ ¿Cuál es tu presupuesto mensual para *{categoria}*?",
+        f"✍️ ¿Cuál es el *límite mensual* para la categoría *{categoria}*?\n\n"
+        f"Por ejemplo: `50.000`",
         parse_mode="Markdown"
     )
     return ESPECIFICAR_LIMITE
@@ -410,6 +426,7 @@ async def guardar_presupuesto(user_id, categoria, limite, update):
         [InlineKeyboardButton("📝 Registrar un gasto", callback_data="registrar_gasto")],
         [InlineKeyboardButton("🚪 Salir", callback_data="salir")],
     ])
+
     await update.message.reply_text("¿Qué deseas hacer ahora?", reply_markup=keyboard)
 
 async def confirmar_reemplazo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -420,11 +437,15 @@ async def confirmar_reemplazo(update: Update, context: ContextTypes.DEFAULT_TYPE
     limite = context.user_data.get("nuevo_limite")
 
     await guardar_presupuesto(user_id, categoria, limite, query)
+
+    context.chat_data.pop("conversation", None)
+
     return PREGUNTAR_ACCION_POST_PRESUPUESTO
 
 async def cancelar_reemplazo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.edit_message_text("❌ Operación cancelada. El presupuesto anterior se mantuvo.")
+    context.chat_data.pop("conversation", None)
     return ConversationHandler.END
 
 async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -432,18 +453,28 @@ async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.
     await query.answer()
 
     opcion = query.data
+    print(f"🔄 manejar_accion_post_presupuesto: opción={opcion}, user={update.effective_user.id}")
+
     if opcion == "otro_presupuesto":
+        origen = context.chat_data.get("conversation")
+        print(origen)
+        if origen not in ["presupuesto", "gasto"]:
+        # Si no está seteado aún, por defecto asumimos "presupuesto"
+            context.chat_data["conversation"] = "presupuesto"
         user_id = str(update.effective_user.id)
-        botones = obtener_categorias_con_botones(user_id)
+        botones = obtener_categorias_con_botones(user_id) 
         await query.edit_message_text("📝 ¿Para qué categoría deseas establecer otro presupuesto?")
         await query.message.reply_text("Selecciona una categoría:", reply_markup=botones)
         return ESCOGER_CATEGORIA
 
     elif opcion == "registrar_gasto":
+        print("✅ Entró en 'registrar_gasto'")
+        context.chat_data.pop("conversation", None)
         await query.edit_message_text("✍️ Escribe el gasto en el formato: 12000 transporte")
         return ConversationHandler.END
 
     elif opcion == "salir":
+        context.chat_data.pop("conversation", None)
         await query.edit_message_text("🚪 ¡Listo! Puedes seguir usando otros comandos cuando quieras.")
         return ConversationHandler.END
 
@@ -454,6 +485,8 @@ async def cancelar_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.message.reply_text("❌ Cancelado. No se guardó ningún presupuesto.")
     elif update.message:
         await update.message.reply_text("❌ Cancelado. No se guardó ningún presupuesto.")
+    
+    context.chat_data.pop("conversation", None)
 
     return ConversationHandler.END
 
@@ -530,11 +563,14 @@ async def responder_consulta_presupuesto(update: Update, context: ContextTypes.D
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE): 
+    print(f"📥 handle_message recibido: {update.message.text}")
     chat_id = update.effective_chat.id
 
     # Verifica si hay una conversación activa
     chat_data = context.chat_data
     conversation_state = chat_data.get('conversation')
+
+    print(context.chat_data.get("conversation"))
 
     if conversation_state is not None:
         # El usuario está en una conversación activa (presupuesto, eliminar, etc.)
@@ -598,12 +634,12 @@ async def handle_categoria_personalizada(update: Update, context: ContextTypes.D
     await guardar_gasto_con_categoria(update, context)
     return HANDLE_GASTO_CATEGORIA
 
-async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id=None):
     user_id = str(update.effective_user.id)
     gasto_data = context.user_data.get("gasto", {})
     categoria = gasto_data.get("categoria")
     monto = gasto_data.get("monto")
-    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha = datetime.datetime.now(pytz.timezone("America/Bogota"))
 
     if not categoria or not monto:
         await update.message.reply_text("❌ Hubo un error guardando el gasto.")
@@ -617,7 +653,16 @@ async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFA
     }
     db.collection("usuarios").document(user_id).collection("gastos").add(gasto)
 
-    await update.message.reply_text(f"💾 Gasto registrado en la categoría *{categoria}* por *${monto:,.0f}*", parse_mode="Markdown")
+    if update.message:
+        await update.message.reply_text(
+            f"💾 Gasto registrado en la categoría *{categoria}* por *${monto:,.0f}*",
+            parse_mode="Markdown"
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+        f"💾 Gasto registrado en la categoría *{categoria}* por *${monto:,.0f}*",
+            parse_mode="Markdown"
+        )
 
     # Verificar si hay presupuesto
     presupuesto_doc = db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).get()
@@ -627,13 +672,18 @@ async def guardar_gasto_con_categoria(update: Update, context: ContextTypes.DEFA
             [InlineKeyboardButton("✅ Sí, establecer límite", callback_data=f"establecer_presupuesto:{categoria}")],
             [InlineKeyboardButton("❌ No, gracias", callback_data="ignorar_presupuesto")]
         ])
-        await update.message.reply_text(
-            f"🔎 Veo que *{categoria}* no tiene un presupuesto mensual definido.\n¿Deseas establecer un límite?",
-            parse_mode="Markdown",
-            reply_markup=keyboard
+        texto = (
+            f"🔎 Veo que *{categoria}* no tiene un presupuesto mensual definido.\n"
+            f"¿Deseas establecer un límite?"
         )
-        return HANDLE_GASTO_CATEGORIA  # 👈 ESTADO PARA QUE LOS BOTONES FUNCIONEN
-
+        if update.message:
+            await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=keyboard)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(texto, parse_mode="Markdown", reply_markup=keyboard)
+        return HANDLE_GASTO_CATEGORIA
+     
+    await verificar_presupuesto(update, user_id, categoria)  # ✅ Mostrar advertencia si excede presupuesto
+    context.chat_data.pop("conversation", None)
     return ConversationHandler.END
 
 async def iniciar_establecer_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -642,12 +692,19 @@ async def iniciar_establecer_presupuesto(update: Update, context: ContextTypes.D
     
     categoria = query.data.split(":")[1]
     context.user_data["categoria_presupuesto"] = categoria
+
+    context.chat_data["conversation"] = "gasto"
     
-    await query.edit_message_text(
-        f"¿Cuál es tu presupuesto mensual para *{categoria}*?",
+    await query.message.reply_text(
+        f"✍️ ¿Cuál es el *límite mensual* para la categoría *{categoria}*?\n\n"
+        f"Por ejemplo: `250.000`",
         parse_mode="Markdown"
     )
-    return ESPECIFICAR_LIMITE
+
+    if context.chat_data.get("conversation") == "gasto":
+        return ESPECIFICAR_LIMITE_GASTO
+    else:
+        return ESPECIFICAR_LIMITE
 
 async def ignorar_presupuesto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -739,7 +796,11 @@ async def ultimo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         .order_by("fecha", direction=firestore.Query.DESCENDING).limit(1).stream()
     for g in gastos:
         d = g.to_dict()
-        fecha_str = d["fecha"].strftime("%Y-%m-%d %H:%M")
+        fecha_val = d["fecha"]
+        if isinstance(fecha_val, str):
+            fecha_val = parser.parse(fecha_val)  # convierte string a datetime
+
+        fecha_str = fecha_val.strftime("%Y-%m-%d %H:%M")
         monto_formateado = formatear_pesos(d["monto"])
         await responder(update, f"📌 Último gasto:\n{monto_formateado} en {d['categoria']} el {fecha_str}")
         return
@@ -755,7 +816,12 @@ async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gasto = gastos[0]
     d = gasto.to_dict()
     context.user_data["ultimo_id"] = gasto.id
-    fecha_str = d["fecha"].strftime("%Y-%m-%d %H:%M")
+    fecha_val = d["fecha"]
+    if isinstance(fecha_val, str):
+        fecha_val = parser.parse(fecha_val)
+
+    fecha_str = fecha_val.strftime("%Y-%m-%d %H:%M")
+    
     monto_formateado = formatear_pesos(d["monto"])
 
     msg = f"❗ ¿Deseas eliminar el último gasto?\n\n💸 {monto_formateado} en {d['categoria']} el {fecha_str}"
@@ -1080,12 +1146,10 @@ def main():
             ESPECIFICAR_LIMITE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, especificar_limite),
                 CallbackQueryHandler(reintentar_especificar_limite, pattern="^reintentar_limite$"),
-                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"),
                 CallbackQueryHandler(cancelar_presupuesto, pattern="^cancelar_presupuesto$")
             ],
             PREGUNTAR_ACCION_POST_PRESUPUESTO: [
                 CallbackQueryHandler(manejar_accion_post_presupuesto),
-                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$"),
                 CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"),
                 CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$")
             ],
@@ -1097,7 +1161,14 @@ def main():
                 CallbackQueryHandler(responder_consulta_presupuesto, pattern=r"^consulta_categoria:.+")
             ]    
         },
-        fallbacks=[CommandHandler("cancelar", cancelar_presupuesto), 
+        fallbacks=[CommandHandler("menu", mostrar_menu),
+                   CommandHandler("ultimo", ultimo),
+                   CommandHandler("total", total),
+                   CommandHandler("resumen", resumen),
+                   CommandHandler("grafico", grafico),
+                   CommandHandler("comparar", comparar),
+                   CommandHandler("eliminar", eliminar),
+                   CommandHandler("cancelar", cancelar_presupuesto), 
                    MessageHandler(filters.COMMAND, cancelar_presupuesto),
                    CallbackQueryHandler(cancelar_presupuesto, pattern=r"^cancelar_presupuesto$") ],
         per_chat=True
@@ -1116,9 +1187,46 @@ def main():
             ],
             HANDLE_GASTO_PERSONALIZADA: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_categoria_personalizada)
-            ]
+            ],
+            ESPECIFICAR_LIMITE_GASTO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, especificar_limite),
+                CallbackQueryHandler(reintentar_especificar_limite, pattern="^reintentar_limite$"),
+                CallbackQueryHandler(cancelar_presupuesto, pattern="^cancelar_presupuesto$")
+            ],
+            ESPECIFICAR_LIMITE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, especificar_limite),
+                CallbackQueryHandler(reintentar_especificar_limite, pattern="^reintentar_limite$"),
+                CallbackQueryHandler(cancelar_presupuesto, pattern="^cancelar_presupuesto$")
+            ],
+            PREGUNTAR_ACCION_POST_PRESUPUESTO_GASTO: [
+                CallbackQueryHandler(manejar_accion_post_presupuesto),
+                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$"),
+                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"),
+                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$")
+            ],
+            PREGUNTAR_ACCION_POST_PRESUPUESTO: [
+                CallbackQueryHandler(manejar_accion_post_presupuesto),
+                CallbackQueryHandler(ignorar_presupuesto, pattern=r"^ignorar_presupuesto$"),
+                CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"),
+            ],
+            ESCOGER_CATEGORIA: [                      # <== AGREGA ESTE BLOQUE
+                CallbackQueryHandler(escoger_categoria, pattern=r"^cat:.*"),
+                CallbackQueryHandler(seleccionar_categoria_presupuesto, pattern=r"^catref:personalizada$"),
+                CallbackQueryHandler(cancelar_presupuesto, pattern="^cancelar_presupuesto$")
+            ],
+            CONFIRMAR_SOBREESCRITURA: [
+                CallbackQueryHandler(confirmar_reemplazo, pattern="^confirmar_reemplazo$"),
+                CallbackQueryHandler(cancelar_reemplazo, pattern="^cancelar_reemplazo$")
+            ],
         },
-        fallbacks=[CommandHandler("cancelar", cancelar_presupuesto),
+        fallbacks=[CommandHandler("menu", mostrar_menu),
+                   CommandHandler("ultimo", ultimo),
+                   CommandHandler("total", total),
+                   CommandHandler("resumen", resumen),
+                   CommandHandler("grafico", grafico),
+                   CommandHandler("comparar", comparar),
+                   CommandHandler("eliminar", eliminar),
+                   CommandHandler("cancelar", cancelar_presupuesto),
                    MessageHandler(filters.COMMAND, cancelar_presupuesto)],
         map_to_parent={}
     )
@@ -1160,9 +1268,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗑️ Eliminar$"), eliminar))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📉 Gráfico$"), grafico))
     app.add_handler(MessageHandler(filters.COMMAND, comando_desconocido))  
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.add_handler(CallbackQueryHandler(iniciar_establecer_presupuesto, pattern=r"^establecer_presupuesto:.+"))
+
     app.add_handler(CallbackQueryHandler(manejar_menu_inline, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(callback_confirmar))# <= al final como respaldo
-    #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Inicia el scheduler (trabaja con asyncio)
     app.job_queue.run_daily(
