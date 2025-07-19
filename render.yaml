@@ -1,0 +1,11 @@
+services:
+  - type: worker
+    name: botGastos
+    env: python
+    plan: free
+    region: oregon
+    branch: main
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    pythonVersion: 3.10.12
