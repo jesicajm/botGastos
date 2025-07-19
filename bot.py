@@ -1124,8 +1124,7 @@ async def comando_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- Main ---
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).job_queue_enabled(True).build()
 
     # Conversación para establecer presupuesto
     conv_presupuesto = ConversationHandler(
