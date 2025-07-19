@@ -3,4 +3,4 @@ python-dotenv==1.0.1
 matplotlib==3.7.1
 pytz==2024.1
 google-cloud-firestore==2.14.0
-
+numpy<2
