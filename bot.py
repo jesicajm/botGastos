@@ -252,7 +252,7 @@ async def manejar_menu_inline(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Ejecutar la función correspondiente
     if data == "menu:registrar_gasto":
-        await query.message.reply_text("✍️ Escribe el gasto en el formato: 5000 comida")
+        await query.message.reply_text("✍️ Escribe el gasto en el formato: 100.000 mercado")
     elif data == "menu:resumen":
         await resumen(update, context)
     elif data == "menu:comparar":
@@ -366,6 +366,29 @@ async def especificar_limite(update: Update, context: ContextTypes.DEFAULT_TYPE)
         categoria = context.user_data['categoria_presupuesto']
         user_id = str(update.effective_user.id)
 
+       # Validar que el nuevo límite no sea menor a lo ya gastado
+        inicio_mes = datetime.datetime.now(pytz.timezone("America/Bogota")).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        gastos = db.collection("usuarios").document(user_id).collection("gastos") \
+            .where("categoria", "==", categoria) \
+            .where("fecha", ">=", inicio_mes).stream()
+        total_gastado = sum(doc.to_dict().get("monto", 0) for doc in gastos)
+
+        if limite < total_gastado:
+            await update.message.reply_text(
+                f"❌ Ya has gastado *{formatear_pesos(total_gastado)}* en esta categoría.\n"
+                f"No puedes establecer un presupuesto menor a lo que ya gastaste.",
+                parse_mode="Markdown"
+            )
+
+            botones = obtener_categorias_con_botones(user_id)
+            await update.message.reply_text(
+                "💼 Por favor, elige otra categoría para ajustar el presupuesto:",
+                reply_markup=botones
+            )
+            return ESCOGER_CATEGORIA        
+
         # Verificar si ya existe
         presupuesto_doc = db.collection("usuarios").document(user_id).collection("presupuestos").document(categoria).get()
 
@@ -470,7 +493,7 @@ async def manejar_accion_post_presupuesto(update: Update, context: ContextTypes.
     elif opcion == "registrar_gasto":
         print("✅ Entró en 'registrar_gasto'")
         context.chat_data.pop("conversation", None)
-        await query.edit_message_text("✍️ Escribe el gasto en el formato: 12000 transporte")
+        await query.edit_message_text("✍️ Escribe el gasto en el formato: 12000 Uber")
         return ConversationHandler.END
 
     elif opcion == "salir":
